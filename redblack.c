@@ -45,7 +45,6 @@ struct rb_node
 
 
 
-
 /// 
 /// _rb_create_node
 ///
@@ -235,7 +234,7 @@ void rb_print(struct rb_node **tree, int indent_level)
 {
 	struct rb_node *node = *tree;
 
-	if (!node || indent_level > 10)	// Limit the depth to avoid infinite loops when there are bugs.
+	if (!node)
 	{
 		return;
 	}
@@ -288,6 +287,36 @@ void _rb_validate_binary_tree(struct rb_node **tree)
 
 
 
+///
+/// _rb_validate_num_children
+///
+/// Check that the tree has the right num_children throughout.
+///
+
+void _rb_validate_num_children(struct rb_node **tree)
+{
+	struct rb_node *node = *tree;
+	if (!node)
+	{
+		return;
+	}
+
+	if (node->num_children > 0)
+	{
+		if (!(node->num_children == (node->left ? node->left->num_children + 1 : 0) + (node->right ? node->right->num_children + 1 : 0)))
+		{
+			rb_print(tree, 0);
+		}
+		ASSERT(node->num_children == (node->left ? node->left->num_children + 1 : 0) + (node->right ? node->right->num_children + 1 : 0), 
+			   "Child count incorrect");
+	}
+	else
+	{
+		ASSERT(node->left == NULL && node->right == NULL, "num_children == 0 must imply it has no children");
+	}
+}
+
+
 
 ///
 /// rb_validate
@@ -298,11 +327,14 @@ void _rb_validate_binary_tree(struct rb_node **tree)
 /// 3. Every path from a given node to the leaf nodes contains the same # of black nodes
 ///
 
-int rb_validate(struct rb_node **tree, struct rb_node *node)
+long rb_validate(struct rb_node **tree, struct rb_node *node)
 {
 	if (*tree == node)
 	{
 		ASSERT(node == NULL || node->color == rb_black, "Root node must be black");
+
+		_rb_validate_binary_tree(tree);
+		_rb_validate_num_children(tree);
 	}
 
 	if (!node)
@@ -313,17 +345,145 @@ int rb_validate(struct rb_node **tree, struct rb_node *node)
 	if (node->color == rb_red)
 	{
 		ASSERT(node->left == NULL || node->left->color == rb_black, "Left child of a red node must be black");
-		ASSERT(node->right == NULL || node->right->color == rb_black, "Left child of a red node must be black");
+		ASSERT(node->right == NULL || node->right->color == rb_black, "Right child of a red node must be black");
 	}
 
 	{
-		int left_depth = rb_validate(tree, node->left);
-		int right_depth = rb_validate(tree, node->right);
-		ASSERT(left_depth == right_depth, "Black depths must match for each node");
+		long left_depth = rb_validate(tree, node->left);
+		long right_depth = rb_validate(tree, node->right);
+//		ASSERT(left_depth == right_depth, "Black depths must match for each node");
 
 		return left_depth + (node->color == rb_black ? 1 : 0);
 	}
 }
+
+
+
+
+
+///
+/// _rb_update_num_children
+///
+/// Sum the childrens' left and right children to figure out how many children this one has.
+
+void _rb_update_num_children(struct rb_node *node)
+{
+	if (node)
+	{
+		node->num_children = (node->left ? node->left->num_children + 1 : 0) + 
+						 	 (node->right ? node->right->num_children  + 1 : 0);
+	}
+}
+
+
+
+
+///
+/// _rb_left_rotate
+///
+/// Perform a left rotate around node.
+/// Note that this can change what is the root of the tree. If so, that needs
+/// to be updated.
+
+void _rb_left_rotate(struct rb_node **tree, struct rb_node *node)
+{
+	struct rb_node *child;
+
+	child = node->right;
+	node->right = child->left;
+	if (child->left)
+	{
+		child->left->parent = node;
+	}
+
+	child->parent = node->parent;
+	if (node->parent)
+	{
+		*_rb_parent_child_pointer(node) = child;
+	}
+	else
+	{
+		*tree = child;
+	}
+
+	child->left = node;
+	node->parent = child;
+
+	_rb_update_num_children(node);
+	_rb_update_num_children(child);
+	if (child->parent)
+	{
+		_rb_update_num_children(child->parent);
+	}
+}
+
+
+
+///
+/// _rb_right_rotate
+///
+/// Perform a right rotate around node.
+/// This is just like the left rotate above, but it's flipped.
+
+void _rb_right_rotate(struct rb_node **tree, struct rb_node *node)
+{
+	struct rb_node *child;
+
+	child = node->left;
+	node->left = child->right;
+	if (child->right)
+	{
+		child->right->parent = node;
+	}
+
+	child->parent = node->parent;
+	if (node->parent)
+	{
+		*_rb_parent_child_pointer(node) = child;
+	}
+	else
+	{
+		*tree = child;
+	}
+
+	child->right = node;
+	node->parent = child;
+
+	_rb_update_num_children(node);
+	_rb_update_num_children(child);
+	if (child->parent)
+	{
+		_rb_update_num_children(child->parent);
+	}
+}
+
+
+
+
+///
+/// _rb_left_child
+///
+/// Just gives the left child.
+
+struct rb_node *_rb_left_child(struct rb_node *node)
+{
+	return node->left;
+}
+
+
+
+
+///
+/// _rb_right_child
+///
+/// Just gives the right child.
+
+struct rb_node *_rb_right_child(struct rb_node *node)
+{
+	return node->right;
+}
+
+
 
 
 
@@ -372,95 +532,41 @@ void _rb_insert_fixup(struct rb_node **tree, struct rb_node *node)
 		}
 		else 
 		{
+
 			// This node is red but the sibling is black (which means it is colored black or NULL). 
 			// Here we need to make sure the node is on the far left or far right of the tree from its
 			// grandparent's perspective. If not, a rotation is needed to get it there.
 			if (parent == grandparent->left && node == parent->right)
 			{
-				// Rotate left.
-				grandparent->left = node;
-				parent->right = node->left;				
-				node->left = parent;
-
-				// Update the parents.
-				node->parent = grandparent;
-				if (parent->right)
-				{
-					parent->right->parent = parent;
-				}
-				parent->parent = node;
-				node = node->left;
+				_rb_left_rotate(tree, parent);
+				node = node->left;				
 			}
 			else if (parent == grandparent->right && node == parent->left)
 			{
-				// Rotate right.
-				grandparent->right = node;
-				parent->left = node->right;
-				node->right = parent;
-
-				// Update the parents.				
-				node->parent = grandparent;
-				if (parent->left)
-				{
-					parent->left->parent = parent;					
-				}
-				parent->parent = node;
+				_rb_right_rotate(tree, parent);
 				node = node->right;
-			}
+			}			
 
 			// Get back the parent and grandparent pointers since they may have changed in the
 			// prior rotation.
 			parent = node->parent;
 			grandparent = parent->parent;
+
 			if (grandparent)
 			{
 
 				// Finally, make the grandparent red, make the parent black and do a rotation to get everything
-				// lined up.				
-				struct rb_node **greatgrandparent_child = _rb_parent_child_pointer(grandparent);
-
+				// lined up.
 				grandparent->color = rb_red;
 				parent->color = rb_black;
 				if (node == parent->left)
 				{
-					// Rotate right.
-					grandparent->left = parent->right;
-					if (grandparent->left)
-					{
-						grandparent->left->parent = grandparent;
-					}
-
-					parent->right = grandparent;
+					_rb_right_rotate(tree, grandparent);
 				}
 				else
 				{
-
-					// Rotate left.
-					grandparent->right = parent->left;
-					if (grandparent->right)
-					{
-						grandparent->right->parent = grandparent;
-					}
-
-					parent->left = grandparent;
-
+					_rb_left_rotate(tree, grandparent);
 				}
-
-				parent->parent = grandparent->parent;
-				grandparent->parent = parent;
-
-
-				// Complete the rotation (this is the same no matter the direction)
-				if (greatgrandparent_child)
-				{
-					*greatgrandparent_child = parent;
-				}
-				else
-				{
-					// In this case, need to reparent the entire tree.
-					*tree = parent;
-				}
-
 			}
 
 		}
@@ -511,105 +617,11 @@ void rb_insert(struct rb_node **tree, struct rb_node **parent, long key, void *d
 		// Update the parent nodes with how many children are there.
 		for (node = (*child)->parent; node; node = node->parent)
 		{
-			node->num_children++;	
+			_rb_update_num_children(node);
 		}
 
 		_rb_insert_fixup(tree, *child);
 	}
-}
-
-
-
-///
-/// _rb_left_rotate
-///
-/// Perform a left rotate around node.
-/// Note that this can change what is the root of the tree. If so, that needs
-/// to be updated.
-
-void _rb_left_rotate(struct rb_node **tree, struct rb_node *node)
-{
-	struct rb_node *child;
-
-	child = node->right;
-	node->right = child->left;
-	if (child->left)
-	{
-		child->left->parent = node;
-	}
-
-	child->parent = node->parent;
-	if (node->parent)
-	{
-		*_rb_parent_child_pointer(node) = child;
-	}
-	else
-	{
-		*tree = child;
-	}
-
-	child->left = node;
-	node->parent = child;
-}
-
-
-
-
-///
-/// _rb_right_rotate
-///
-/// Perform a right rotate around node.
-/// This is just like the left rotate above, but it's flipped.
-
-void _rb_right_rotate(struct rb_node **tree, struct rb_node *node)
-{
-	struct rb_node *child;
-
-	child = node->left;
-	node->left = child->right;
-	if (child->right)
-	{
-		child->right->parent = node;
-	}
-
-	child->parent = node->parent;
-	if (node->parent)
-	{
-		*_rb_parent_child_pointer(node) = child;
-	}
-	else
-	{
-		*tree = child;
-	}
-
-	child->right = node;
-	node->parent = child;
-}
-
-
-
-
-///
-/// _rb_left_child
-///
-/// Just gives the left child.
-
-struct rb_node *_rb_left_child(struct rb_node *node)
-{
-	return node->left;
-}
-
-
-
-
-///
-/// _rb_right_child
-///
-/// Just gives the right child.
-
-struct rb_node *_rb_right_child(struct rb_node *node)
-{
-	return node->right;
 }
 
 
@@ -721,11 +733,6 @@ void rb_delete(struct rb_node **tree, long key)
 		node->data = victim->data;
 	}
 
-	// Update the number of children for all the parents.
-	for (node = victim->parent; node; node = node->parent)
-	{
-		node->num_children--;
-	}
 
 	if (victim->color == rb_black)
 	{
@@ -742,10 +749,21 @@ void rb_delete(struct rb_node **tree, long key)
 	if (victim->parent == NULL)	// victim was the root?
 	{
 		*tree = victims_child;
+		if (victims_child)
+		{
+			// Root must be black!
+			victims_child->color = rb_black;		
+		}
 	}
 	else
 	{
 		*_rb_parent_child_pointer(victim) = victims_child;
+
+		// Update the number of children for all the parents.
+		for (node = victim->parent; node; node = node->parent)
+		{
+			_rb_update_num_children(node);
+		}		
 	}
 
 	free(victim);
@@ -825,10 +843,9 @@ void TEST_rb_simple()
 	for (i = 0; i < 1000; i++)
 	{
 		rb_insert(tree, tree, i, (void *)i);
+		rb_validate(tree, *tree);
 	}
-	rb_validate(tree, *tree);
-	rb_print(tree, 0);
-	
+
 	for (i = 0; i < 1000; i++) 
 	{
 		if ((long)rb_lookup(tree, i) != i)
@@ -844,11 +861,12 @@ void TEST_rb_simple()
 		exit(1);
 	}
 
-	printf("Maximum depth for forward: %ld\n", rb_maximum_depth(tree));
-	
+	printf("Maximum depth for forward: %ld, Black depth: %ld\n", rb_maximum_depth(tree), rb_validate(tree, *tree));
+
 	for (i = 0; i < 1000; i++) 
 	{
 		rb_delete(tree, i);
+		rb_validate(tree, *tree);
 	}
 
 	if (rb_count(tree) != 0) 
@@ -862,8 +880,8 @@ void TEST_rb_simple()
 	for (i = 999; i >= 0; i--)
 	{
 		rb_insert(tree, tree, i, (void *)i);
+		rb_validate(tree, *tree);
 	}
-	rb_validate(tree, *tree);
 	
 	for (i = 999; i >= 0; i--) 
 	{
@@ -880,11 +898,12 @@ void TEST_rb_simple()
 		exit(1);
 	}
 	
-	printf("Maximum depth for backward: %ld\n", rb_maximum_depth(tree));
+	printf("Maximum depth for backward: %ld, Black depth: %ld\n", rb_maximum_depth(tree), rb_validate(tree, *tree));
 
 	for (i = 999; i >= 0; i--) 
 	{
 		rb_delete(tree, i);
+		rb_validate(tree, *tree);		
 	}
 
 	if (rb_count(tree) != 0) 
@@ -912,6 +931,7 @@ void TEST_rb_simple()
 	for (i = 0; i < 1000; i++)
 	{
 		rb_insert(tree, tree, array[i], (void *)array[i]);
+		rb_validate(tree, *tree);
 	}
 	
 	for (i = 0; i < 1000; i++) 
@@ -929,12 +949,13 @@ void TEST_rb_simple()
 		exit(1);
 	}
 
-	printf("Maximum depth for randomish: %ld\n", rb_maximum_depth(tree));
-	
+	printf("Maximum depth for randomish: %ld, Black depth: %ld\n", rb_maximum_depth(tree), rb_validate(tree, *tree));
+
 	// This time delete the root again and again.
 	for (i = 0; i < 1000; i++) 
 	{
 		rb_delete(tree, (*tree)->key);
+		rb_validate(tree, *tree);		
 	}
 
 	if (rb_count(tree) != 0) 
